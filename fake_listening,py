@@ -1,0 +1,126 @@
+import os
+import time
+import json
+import enum
+
+from pypresence import Presence
+
+ActivityType = enum.Enum(
+    "ActivityType",
+    {"PLAYING": 0, "STREAMING": 1, "LISTENING": 2, "WATCHING": 3, "COMPETING": 5},
+)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ---------------------------------------------------------------------------
+# Configuration - edit these values
+# ---------------------------------------------------------------------------
+
+# Create your own application at https://discord.com/developers/applications
+# and paste its Client ID here.
+CLIENT_ID = "YOUR_DISCORD_APPLICATION_CLIENT_ID"
+
+# How the activity is displayed ("Listening to {ACTIVITY_NAME}")
+ACTIVITY_TYPE = ActivityType.LISTENING
+ACTIVITY_NAME = "Spotify"
+
+DETAILS = "Nightcall"
+STATE = "Kavinsky"
+
+# When the user clicks the song line, this URL opens (leave None to disable)
+DETAILS_URL = None
+
+# Key of the image uploaded under "Rich Presence Art Assets" in your app
+IMAGE_KEY = "portada"
+IMAGE_TEXT = "Nightcall - Kavinsky"
+
+# Seconds the counter starts from. Example: 1000 hours = 1000 * 3600
+INITIAL_SECONDS = 1000 * 3600
+
+# Where the accumulated time is persisted between runs
+STATE_FILE = os.path.join(os.environ.get("APPDATA", BASE_DIR), "FakeSpotify", "progress.json")
+
+# ---------------------------------------------------------------------------
+
+
+def check_license():
+    if not os.path.isfile(os.path.join(BASE_DIR, "LICENSE")):
+        raise SystemExit(
+            "LICENSE file not found.\n"
+            "Please clone the full repository and keep the LICENSE file next to this script."
+        )
+
+
+def load_progress():
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return int(json.load(f)["total"])
+    except Exception:
+        return INITIAL_SECONDS
+
+
+def save_progress(total):
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"total": total}, f)
+    os.replace(tmp, STATE_FILE)
+
+
+def strip_none(data):
+    return {k: strip_none(v) if isinstance(v, dict) else v for k, v in data.items() if v is not None}
+
+
+check_license()
+
+total = load_progress()
+started = time.time()
+
+rpc = Presence(CLIENT_ID)
+rpc.connect()
+
+payload = {
+    "cmd": "SET_ACTIVITY",
+    "args": strip_none(
+        {
+            "pid": os.getpid(),
+            "activity": {
+                "type": ACTIVITY_TYPE.value,
+                "status_display_type": 0,
+                "state": STATE,
+                "state_url": None,
+                "details": DETAILS,
+                "details_url": DETAILS_URL,
+                "name": ACTIVITY_NAME,
+                "timestamps": {"start": int(started - total), "end": None},
+                "assets": {
+                    "large_image": IMAGE_KEY,
+                    "large_text": IMAGE_TEXT,
+                    "small_image": None,
+                    "small_text": None,
+                },
+                "party": {"id": None, "size": None},
+                "secrets": {"join": None, "spectate": None, "match": None},
+                "buttons": None,
+                "instance": True,
+            },
+        }
+    ),
+    "nonce": "{:.20f}".format(time.time()),
+}
+
+rpc.update(payload_override=payload)
+
+print(f"Presence set: {ACTIVITY_NAME} | resuming from {total} seconds.")
+print("Press Ctrl+C to exit.")
+
+last_save = time.time()
+while True:
+    now = time.time()
+    if now - last_save >= 15:
+        try:
+            save_progress(total + int(now - started))
+        except Exception as exc:
+            print(f"Could not save progress: {exc}")
+        last_save = now
+    time.sleep(5)
